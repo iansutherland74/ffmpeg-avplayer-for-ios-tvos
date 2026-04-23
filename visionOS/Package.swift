@@ -12,6 +12,9 @@ let package = Package(
             targets: ["FFmpegAVPlayerVisionOS"]
         )
     ],
+    dependencies: [
+        .package(path: "../../ffmpeg-kit-8.1/visionos-2d-to-3d")
+    ],
     targets: [
         .binaryTarget(
             name: "avcodec",
@@ -40,6 +43,7 @@ let package = Package(
         .target(
             name: "FFmpegAVPlayerVisionOS",
             dependencies: [
+                .product(name: "VisionOS2Dto3D", package: "visionos-2d-to-3d"),
                 "avcodec",
                 "avformat",
                 "avfilter",

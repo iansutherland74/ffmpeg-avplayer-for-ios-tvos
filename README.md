@@ -11,6 +11,7 @@ This repository now includes a **visionOS integration path** that is aligned wit
 the FFmpeg 8.1 XCFramework artifacts built in:
 
 - ../ffmpeg-kit-8.1/prebuilt-visionos/FFmpegXCFrameworks
+- ../ffmpeg-kit-8.1/visionos-2d-to-3d
 
 Important:
 
@@ -45,8 +46,13 @@ print(formatVersion, codecVersion)
 ### What this gives you
 
 - A maintained, visionOS-native linkage path to FFmpeg 8.1.
+- Direct 2D-to-3D frame conversion support through VisionOS2Dto3D.
 - Clean separation between legacy iOS/tvOS demo binaries and visionOS runtime.
 - A base you can extend for your own decoder/player pipeline (for example, AVSampleBufferDisplayLayer or RealityKit renderer paths).
+
+The `visionOS` package includes `VisionStereoPipeline`, a high-level wrapper that
+combines FFmpeg decode output (`CVPixelBuffer`) with 2D-to-3D processing and
+host-time enqueuing via `AVSampleBufferVideoRenderer`.
 
 ###Note
 - Now AVPlayer framework is able to play high resolution videos by using hardware accelerator feature embedded in iPhone/iPad even for MKV or AVI in H264, but this feature requires arm64, iOS 8 or later devices.
