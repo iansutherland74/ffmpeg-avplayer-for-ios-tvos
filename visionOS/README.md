@@ -28,6 +28,7 @@ so keep this repository adjacent to your ffmpeg-kit-8.1 checkout.
 - Package.swift
 - Sources/FFmpegAVPlayerVisionOS/FFmpegBridge.swift
 - Sources/FFmpegAVPlayerVisionOS/VisionStereoPipeline.swift
+- Sources/FFmpegAVPlayerVisionOS/VisionStereoAssetPlayer.swift
 - FFmpegXCFrameworks/ (copied by setup script)
 
 ## Notes
@@ -61,3 +62,31 @@ try pipeline.processAndEnqueue(
 
 // Attach pipeline.renderer to your video render path.
 ```
+
+## File-based visionOS player
+
+Use `VisionStereoAssetPlayer` when you want an end-to-end path from file URL to
+stereo renderer output:
+
+```swift
+import CoreML
+import FFmpegAVPlayerVisionOS
+import VisionOS2Dto3D
+
+let config = MLModelConfiguration()
+config.computeUnits = .all
+
+let model = try DepthAnythingModelLoader.loadBundledModel(configuration: config)
+let player = try VisionStereoAssetPlayer(model: model)
+
+player.onError = { error in
+  print("visionOS player error: \(error)")
+}
+
+player.play(url: mediaURL)
+
+// Attach player.renderer to your presentation path.
+```
+
+This class uses `AVAssetReader` to read video frames and pushes each frame
+through `VisionStereoPipeline` for 2D-to-3D conversion and host-time rendering.

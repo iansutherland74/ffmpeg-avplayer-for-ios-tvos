@@ -54,6 +54,10 @@ The `visionOS` package includes `VisionStereoPipeline`, a high-level wrapper tha
 combines FFmpeg decode output (`CVPixelBuffer`) with 2D-to-3D processing and
 host-time enqueuing via `AVSampleBufferVideoRenderer`.
 
+It also includes `VisionStereoAssetPlayer`, a file-based player that uses
+`AVAssetReader` to decode frames, runs them through the 2D-to-3D pipeline, and
+publishes frames via `AVSampleBufferVideoRenderer` for visionOS presentation.
+
 ###Note
 - Now AVPlayer framework is able to play high resolution videos by using hardware accelerator feature embedded in iPhone/iPad even for MKV or AVI in H264, but this feature requires arm64, iOS 8 or later devices.
  
