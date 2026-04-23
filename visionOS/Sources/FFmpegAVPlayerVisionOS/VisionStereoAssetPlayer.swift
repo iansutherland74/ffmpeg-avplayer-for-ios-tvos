@@ -3,12 +3,22 @@ import AVFoundation
 import CoreMedia
 import CoreML
 
+public enum VisionStereoPlaybackState: Sendable {
+    case idle
+    case playing
+    case paused
+    case stopped
+    case completed
+    case failed
+}
+
 /// Errors produced by `VisionStereoAssetPlayer`.
 public enum VisionStereoAssetPlayerError: Error, LocalizedError {
     case noVideoTrack
     case cannotAddOutput
     case startReadingFailed(String)
     case readerFailed(String)
+    case noLoadedURLForSeek
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +30,8 @@ public enum VisionStereoAssetPlayerError: Error, LocalizedError {
             return "AVAssetReader failed to start: \(message)"
         case let .readerFailed(message):
             return "AVAssetReader failed during playback: \(message)"
+        case .noLoadedURLForSeek:
+            return "No current media URL is loaded for seek"
         }
     }
 }
@@ -29,11 +41,18 @@ public enum VisionStereoAssetPlayerError: Error, LocalizedError {
 public final class VisionStereoAssetPlayer {
     public let renderer: AVSampleBufferVideoRenderer
     public var onError: ((Error) -> Void)?
+    public var onStateChanged: ((VisionStereoPlaybackState) -> Void)?
+    public var onPlaybackTimeChanged: ((CMTime) -> Void)?
 
     private let pipeline: VisionStereoPipeline
     private let readerStateQueue = DispatchQueue(label: "com.ffmpegavplayer.vision.reader")
+    private let controlStateQueue = DispatchQueue(label: "com.ffmpegavplayer.vision.controls")
     private var reader: AVAssetReader?
     private var playbackTask: Task<Void, Never>?
+    private var currentURL: URL?
+    private var currentState: VisionStereoPlaybackState = .idle
+    private var isPaused = false
+    private var playbackRate: Double = 1.0
 
     public init(
         model: MLModel,
@@ -52,24 +71,66 @@ public final class VisionStereoAssetPlayer {
         pipeline.updateMaxDisparity(value)
     }
 
-    public func play(url: URL) {
+    public func play(url: URL, startAt: CMTime = .zero) {
         stop()
+
+        controlStateQueue.sync {
+            currentURL = url
+            isPaused = false
+        }
+        emitState(.playing)
 
         playbackTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                try await self.playInternal(url: url)
+                try await self.playInternal(url: url, startAt: startAt)
+                await MainActor.run {
+                    self.emitState(.completed)
+                }
             } catch {
                 await MainActor.run {
+                    self.emitState(.failed)
                     self.onError?(error)
                 }
             }
         }
     }
 
+    public func pause() {
+        controlStateQueue.sync {
+            isPaused = true
+        }
+        emitState(.paused)
+    }
+
+    public func resume() {
+        controlStateQueue.sync {
+            isPaused = false
+        }
+        emitState(.playing)
+    }
+
+    public func setPlaybackRate(_ rate: Double) {
+        controlStateQueue.sync {
+            playbackRate = max(0.25, min(rate, 4.0))
+        }
+    }
+
+    public func seek(to time: CMTime) throws {
+        let url = controlStateQueue.sync { currentURL }
+        guard let url else {
+            throw VisionStereoAssetPlayerError.noLoadedURLForSeek
+        }
+        play(url: url, startAt: time)
+    }
+
     public func stop() {
         playbackTask?.cancel()
         playbackTask = nil
+
+        controlStateQueue.sync {
+            isPaused = false
+        }
 
         readerStateQueue.sync {
             reader?.cancelReading()
@@ -77,9 +138,10 @@ public final class VisionStereoAssetPlayer {
         }
 
         pipeline.flushForReattach()
+        emitState(.stopped)
     }
 
-    private func playInternal(url: URL) async throws {
+    private func playInternal(url: URL, startAt: CMTime) async throws {
         let asset = AVURLAsset(url: url)
         guard let videoTrack = try await asset.loadTracks(withMediaCharacteristic: .visual).first else {
             throw VisionStereoAssetPlayerError.noVideoTrack
@@ -89,6 +151,9 @@ public final class VisionStereoAssetPlayer {
         let defaultFrameDuration = Self.defaultDuration(fromNominalFrameRate: nominalFrameRate)
 
         let reader = try AVAssetReader(asset: asset)
+        if startAt.isValid, startAt > .zero {
+            reader.timeRange = CMTimeRange(start: startAt, duration: .positiveInfinity)
+        }
         let outputSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:]
@@ -113,6 +178,13 @@ public final class VisionStereoAssetPlayer {
         var lastPTS: CMTime = .invalid
 
         while !Task.isCancelled {
+            while controlStateQueue.sync(execute: { isPaused }) {
+                try await Task.sleep(nanoseconds: 20_000_000)
+                if Task.isCancelled {
+                    break
+                }
+            }
+
             guard let sampleBuffer = output.copyNextSampleBuffer() else { break }
             guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
 
@@ -126,7 +198,18 @@ public final class VisionStereoAssetPlayer {
                 duration: frameDuration
             )
 
-            try await Self.pacePlayback(currentPTS: pts, lastPTS: lastPTS, defaultDuration: frameDuration)
+            await MainActor.run {
+                self.onPlaybackTimeChanged?(pts)
+            }
+
+            let activeRate = controlStateQueue.sync { playbackRate }
+
+            try await Self.pacePlayback(
+                currentPTS: pts,
+                lastPTS: lastPTS,
+                defaultDuration: frameDuration,
+                playbackRate: activeRate
+            )
             lastPTS = pts
         }
 
@@ -152,7 +235,8 @@ public final class VisionStereoAssetPlayer {
     private static func pacePlayback(
         currentPTS: CMTime,
         lastPTS: CMTime,
-        defaultDuration: CMTime
+        defaultDuration: CMTime,
+        playbackRate: Double
     ) async throws {
         var sleepSeconds = defaultDuration.seconds
 
@@ -162,6 +246,8 @@ public final class VisionStereoAssetPlayer {
                 sleepSeconds = delta.seconds
             }
         }
+
+        sleepSeconds = sleepSeconds / max(0.25, min(playbackRate, 4.0))
 
         guard sleepSeconds.isFinite, sleepSeconds > 0 else {
             return
@@ -173,5 +259,11 @@ public final class VisionStereoAssetPlayer {
         if nanos > 0 {
             try await Task.sleep(nanoseconds: nanos)
         }
+    }
+
+    @MainActor
+    private func emitState(_ state: VisionStereoPlaybackState) {
+        currentState = state
+        onStateChanged?(state)
     }
 }

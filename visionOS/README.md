@@ -29,6 +29,7 @@ so keep this repository adjacent to your ffmpeg-kit-8.1 checkout.
 - Sources/FFmpegAVPlayerVisionOS/FFmpegBridge.swift
 - Sources/FFmpegAVPlayerVisionOS/VisionStereoPipeline.swift
 - Sources/FFmpegAVPlayerVisionOS/VisionStereoAssetPlayer.swift
+- Sources/FFmpegAVPlayerVisionOS/FFmpegRuntimeCapabilities.swift
 - FFmpegXCFrameworks/ (copied by setup script)
 
 ## Notes
@@ -83,10 +84,46 @@ player.onError = { error in
   print("visionOS player error: \(error)")
 }
 
+player.onStateChanged = { state in
+  print("state: \(state)")
+}
+
+player.onPlaybackTimeChanged = { pts in
+  print("playback pts: \(pts.seconds)")
+}
+
 player.play(url: mediaURL)
+
+// Optional controls:
+player.pause()
+player.resume()
+player.setPlaybackRate(1.25)
+try player.seek(to: CMTime(seconds: 30, preferredTimescale: 600))
 
 // Attach player.renderer to your presentation path.
 ```
 
 This class uses `AVAssetReader` to read video frames and pushes each frame
 through `VisionStereoPipeline` for 2D-to-3D conversion and host-time rendering.
+
+Supported controls in this package player path:
+
+- play (with optional start time)
+- pause / resume
+- stop
+- seek
+- playback speed control (`0.25x` to `4.0x`)
+- state callback and playback timestamp callback
+
+## Capability checks (protocols and Dolby decoder presence)
+
+```swift
+import FFmpegAVPlayerVisionOS
+
+let inputProtocols = FFmpegRuntimeCapabilities.inputProtocols()
+let hasRTSP = FFmpegRuntimeCapabilities.supportsInputProtocol("rtsp")
+let hasRTMP = FFmpegRuntimeCapabilities.supportsInputProtocol("rtmp")
+
+let dolby = FFmpegRuntimeCapabilities.supportsDolbyFamily()
+print("ac3=\(dolby.ac3) eac3=\(dolby.eac3) truehd=\(dolby.truehd)")
+```
